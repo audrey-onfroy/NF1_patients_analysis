@@ -1,6 +1,6 @@
 ---
-title: "MPNST project"
-subtitle: "All patients datasets"
+title: "NF1 patients"
+subtitle: "Tumor cells dataset"
 author: "Audrey"
 date: "`r format(Sys.time(), '%Y-%m-%d')`"
 output:
@@ -12,14 +12,9 @@ output:
     number_sections: false
 ---
 
-<style>
 body {
 text-align: justify}
 </style>
-
-```{r clean, echo = FALSE}
-rm(list = ls())
-```
 
 <!-- Automatically computes and prints in the output the running time for any code chunk -->
 ```{r, echo=FALSE}
@@ -47,9 +42,9 @@ knitr::knit_hooks$set(
     function(before, options) {
       if (options$time_it) {
         if (before) {
-          now <= as.numeric(Sys.time())
+          now <<- Sys.time()
         } else {
-          res = as.numeric(Sys.time()) - now # seconds
+          res = difftime(Sys.time(), now, units = "secs")
           paste("(Time to run :", round(res, digits = 2), "s)")
         }
       }
@@ -82,46 +77,41 @@ knitr::opts_chunk$set(echo = TRUE, # display code
                       time_it = FALSE)
 ```
 
-
-This file is used to make a tumor cells dataset, to then run trajectory inference tools.
+This script is used to generate a tumor cells dataset. Tumor cells and fibroblasts are difficult to distinguish. We extract cells from the combined dataset. Merging cells together helps to make difference between both cell types.
 
 ```{r library}
-library(dplyr)
 library(patchwork)
 library(ggplot2)
-library(ComplexHeatmap)
-```
+library(dplyr)
 
+.libPaths()
+```
 
 # Preparation
 
 In this section, we set the global settings of the analysis. We will store data there :
 
 ```{r out_dir}
-save_name = "tumor_patients"
-out_dir = "/home/aurelien/Documents/Audrey/git_analysis/mpnst_project/6_tumor_cells_patients/"
+save_name = "patients_tumor_cells"
+out_dir = "."
+n_threads = 3 # Rtsne::Rtsne option
 ```
 
 We load the sample information :
 
-```{r custom_palette_sample, fig.width = 10, fig.height = 1}
-sample_info = readRDS(file = paste0(out_dir, "/../4_combined_patients/all_patients_sample_info.rds"))
+```{r custom_palette_sample, fig.width = 8, fig.height = 8}
+sample_info = readRDS(paste0(out_dir, "/../1_metadata/patients_sample_info.rds"))
+project_names_oi = sample_info$project_name
 
-project_names_oi = as.character(sample_info$project_name)
-
-ggplot2::ggplot(sample_info) +
-  ggplot2::geom_label(aes(x = project_name, y = 0, label = project_name, fill = project_name)) +
-  ggplot2::geom_text(aes(x = project_name, y = 1, label = sample_identifier)) +
-  ggplot2::lims(y = c(-1, 2)) +
-  ggplot2::scale_fill_manual(values = sample_info$color, breaks = sample_info$project_name) +
-  ggplot2::theme_void() +
-  ggplot2::theme(legend.position = "none")
+graphics::pie(rep(1, nrow(sample_info)),
+              col = sample_info$color,
+              labels = sample_info$project_name)
 ```
 
 Here are custom colors for each cell type :
 
 ```{r color_markers, fig.width = 10, fig.height = 1, class.source = "fold-hide"}
-color_markers = readRDS(paste0(out_dir, "/../1_metadata/datasets_color_markers.rds"))
+color_markers = readRDS(paste0(out_dir, "/../1_metadata/patients_color_markers.rds"))
 
 data.frame(cell_type = names(color_markers),
            color = unlist(color_markers)) %>%
@@ -138,247 +128,100 @@ data.frame(cell_type = names(color_markers),
 
 # Make `r save_name` dataset
 
-## Individual datasets
+## Load combined dataset
 
-We extract a cluster annotated as `r save_name` in each dataset. For each sample, we :
+We load the dataset containing all cells from all samples :
 
-* load individual dataset
-* look at `r save_name` markers
-* look at `r save_name` score for each cluster
-* select the best clusters based on average `r save_name` score
-
-We load individual datasets :
-
-```{r sobj_list}
-sobj_list = lapply(project_names_oi, FUN = function(one_project_name) {
-  subsobj = readRDS(paste0(out_dir, "/../3_individual_patients/filtered/",
-                           one_project_name, "_sobj_filtered.rds"))
-  return(subsobj)
-})
-names(sobj_list) = project_names_oi
-
-lapply(sobj_list, FUN = dim) %>%
-  do.call(rbind, .)
-```
-
-
-We represent cells in the tSNE :
-
-```{r name2D}
-name2D = "RNA_pca_20_tsne"
-```
-
-
-We look gene markers expression level on the projection, to locate immune cells :
-
-```{r gene_expression, fig.width = 12, fig.height = 80}
-tumor_markers = c("DLK1", "SOX10", "PLP1")
-
-plot_list = lapply(sobj_list, FUN = function(one_sobj) {
-  subtitle = as.character(unique(one_sobj$project_name))
-  plot_sublist = lapply(tumor_markers, FUN = function(one_gene) {
-    p = Seurat::FeaturePlot(one_sobj, reduction = name2D,
-                            features = one_gene) +
-      ggplot2::labs(subtitle = subtitle) +
-      Seurat::NoAxes() +
-      ggplot2::scale_color_gradientn(colors = aquarius:::color_gene) +
-      ggplot2::theme(aspect.ratio = 1,
-                     plot.subtitle = element_text(hjust = 0.5))
-    return(p)
-  })
-  return(plot_sublist)
-}) %>% unlist(., recursive = FALSE)
-
-patchwork::wrap_plots(plot_list, ncol = length(tumor_markers))
-```
-
-We attribute a score for immune cells in each dataset :
-
-```{r score_immune_cells}
-tumor_markers = c("SOX10", "SOX9", "PLP1", "DLK1", "PDGFRA", "PDGFA",
-                  "PDGFRB", "PDGFB", "POSTN", "GPM6B", "GAS1",
-                  "CXCL12", "PRSS23", "CRABP1", "SFRP1", "SERPINE2", "CCNB1IP1",
-                  toupper(aquarius::cell_markers$`tumor cells`)) %>% unique()
-
-sobj_list = lapply(sobj_list, FUN = function(one_sobj) {
-  one_sobj$tumor_score = Seurat::AddModuleScore(
-    one_sobj,
-    features = list(tumor_markers))$Cluster1
-  
-  return(one_sobj)
-})
-```
-
-We identify a threshold to select cells :
-
-```{r score_vector, fig.width = 10, fig.height = 5}
-score_vector = lapply(sobj_list, FUN = function(one_sobj) {
-  return(one_sobj$tumor_score)
-}) %>% unlist() %>% unname()
-
-hist(score_vector, breaks = 200,
-     xlab = "Score for tumor cells",
-     ylab = "Number of cells",
-     main = "Histogram")
-```
-
-
-We add a new column to then select cells.
-
-```{r add_is_oi}
-mean_score_thresh = 0.1
-
-sobj_list = lapply(sobj_list, FUN = function(one_sobj) {
-  ## Score by cluster
-  score_by_clusters = one_sobj@meta.data %>%
-    dplyr::select(seurat_clusters, tumor_score) %>%
-    dplyr::group_by(seurat_clusters) %>%
-    dplyr::summarise(avg_score = mean(tumor_score)) %>%
-    as.data.frame()
-  
-  ## Cluster of interest
-  cluster_of_interest = score_by_clusters %>%
-    dplyr::filter(avg_score > mean_score_thresh) %>%
-    dplyr::pull(seurat_clusters) %>%
-    as.character()
-  one_sobj$is_of_interest = ifelse(one_sobj$seurat_clusters %in% cluster_of_interest,
-                                   yes = TRUE, no = FALSE)
-  
-  ## Output
-  return(one_sobj)
-})
-
-lapply(sobj_list, FUN = function(one_sobj) {
-  table(one_sobj$is_of_interest)
-}) %>% do.call(rbind, .) %>%
-  rbind(., colSums(.))
-```
-
-
-We represent, on the projection, score, clusters we will select, and represent the average score for each cluster, by dataset.
-
-```{r score_by_clusters, fig.width = 12, fig.height = 80, class.source = "fold-hide"}
-plot_list = lapply(sobj_list, FUN = function(one_sobj) {
-  project_name = as.character(unique(one_sobj$project_name))
-  
-  #--------------------- copied-pasted
-  ## Score by cluster
-  score_by_clusters = one_sobj@meta.data %>%
-    dplyr::select(seurat_clusters, tumor_score) %>%
-    dplyr::group_by(seurat_clusters) %>%
-    dplyr::summarise(avg_score = mean(tumor_score)) %>%
-    as.data.frame()
-  
-  ## Cluster of interest
-  cluster_of_interest = score_by_clusters %>%
-    dplyr::filter(avg_score > mean_score_thresh) %>%
-    dplyr::pull(seurat_clusters) %>%
-    as.character()
-  #---------------------
-  
-  ## Number of cells
-  nb_cells_ind = sum(one_sobj$tumor_score > mean_score_thresh)
-  nb_cells_clust = sum(one_sobj$seurat_clusters %in% cluster_of_interest)
-  
-  ## Figure
-  p_score = Seurat::FeaturePlot(one_sobj, reduction = name2D,
-                                features = "tumor_score") +
-    ggplot2::labs(title = paste0(nb_cells_ind, " cells"),
-                  subtitle = paste0("Score for tumor cells"),
-                  y = project_name) +
-    ggplot2::scale_color_gradient2(low = aquarius:::color_cnv[1],
-                                   mid = aquarius:::color_cnv[2],
-                                   high = aquarius:::color_cnv[3],
-                                   midpoint = 0) +
-    Seurat::NoAxes() +
-    ggplot2::theme(aspect.ratio = 1,
-                   plot.subtitle = element_text(hjust = 0.5),
-                   axis.title.y = element_text(size = 20, face = "bold", angle = 90))
-  
-  p_cluster = Seurat::DimPlot(one_sobj, reduction = name2D,
-                              group.by = "is_of_interest") +
-    ggplot2::labs(title = paste0(nb_cells_clust, " cells"),
-                  subtitle = paste0("Clusters : ", paste(cluster_of_interest, collapse = ", "))) +
-    Seurat::NoAxes() + Seurat::NoLegend() +
-    ggplot2::theme(aspect.ratio = 1,
-                   plot.title = element_text(hjust = 0.5),
-                   plot.subtitle = element_text(hjust = 0.5))
-  
-  p_mean = ggplot2::ggplot(score_by_clusters, aes(x = seurat_clusters, y = avg_score)) +
-    ggplot2::geom_point() +
-    ggplot2::geom_hline(yintercept = mean_score_thresh, col = "red") +
-    ggplot2::labs(x = "Cluster ID", y = "Mean score",
-                  title = "Mean score by cluster") +
-    ggplot2::theme_classic() +
-    ggplot2::theme(plot.title = element_text(hjust = 0.5, face = "bold"))
-  
-  ## Output
-  return(list(p_score, p_cluster, p_mean))
-}) %>% unlist(., recursive = FALSE)
-
-patchwork::wrap_plots(plot_list, ncol = 3, widths = c(1,1,2))
-```
-
-
-## Combined dataset
-
-For each sample, we extract cells of interest based on clusters mean score, and build a new dataset.
-
-```{r subset_is_of_interest}
-sobj_list = lapply(sobj_list, FUN = function(one_sobj) {
-  if (sum(one_sobj$is_of_interest) > 0) {
-    one_sobj = subset(one_sobj, is_of_interest == TRUE)
-  } else {
-    one_sobj = NA
-  }
-  return(one_sobj)
-})
-
-lapply(sobj_list, FUN = dim) %>%
-  do.call(rbind, .) %>%
-  rbind(., colSums(.))
-```
-
-
-We combine all datasets :
-
-```{r merge_datasets}
-sobj = base::merge(sobj_list[[1]],
-                   y = sobj_list[c(2:length(sobj_list))],
-                   add.cell.ids = project_names_oi)
-
-rm(sobj_list)
+```{r load_sobj}
+sobj = readRDS(paste0(out_dir, "/../3_combined/all_patients_sobj.rds"))
 sobj
 ```
 
+We smooth cell type annotation at a cluster level :
 
-We set factor levels in the Seurat object :
+```{r smooth_annotation}
+cluster_type = table(sobj$cell_type, sobj$seurat_clusters) %>%
+  prop.table(., margin = 2) %>%
+  apply(., 2, which.max)
+cluster_type = setNames(nm = names(cluster_type),
+                        levels(sobj$cell_type)[cluster_type])
 
-```{r sobj_set_factor_levels}
-sobj$orig.ident = factor(sobj$orig.ident,
-                         levels = levels(sample_info$project_name))
-sobj$project_name = factor(sobj$project_name,
-                           levels = levels(sample_info$project_name))
-sobj$sample_identifier = factor(sobj$sample_identifier,
-                                levels = levels(sample_info$sample_identifier))
-sobj$genotype = factor(sobj$genotype,
-                       levels = levels(sample_info$genotype))
-sobj$sample_type = factor(sobj$sample_type,
-                          levels = levels(sample_info$sample_type))
-sobj$cell_type = factor(sobj$cell_type,
-                        levels = names(color_markers))
+sobj$cluster_type = cluster_type[sobj$seurat_clusters]
+
+sobj$cluster_type = factor(sobj$cluster_type, levels = levels(sobj$cell_type))
+
+table(sobj$cluster_type, sobj$cell_type)
 ```
 
-# Processing
+We visualize cell types, clustering and tumor type on the tSNE :
 
-We remove genes that are expressed in less than 5 cells :
+```{r see_cell_type_clusters, fig.width = 10, fig.height = 10}
+name2D = "harmony_80_tsne"
 
-```{r filter_genes}
-sobj = aquarius::filter_features(sobj, min_cells = 5)
+plot_list = list()
+
+# Tumor type
+plot_list[[1]] = Seurat::DimPlot(sobj, group.by = "tumor_type",
+                                 reduction = name2D,
+                                 cols = c("blue", "green", "brown")) +
+  ggplot2::labs(title = "Tumor type") +
+  Seurat::NoAxes() +
+  ggplot2::theme(aspect.ratio = 1,
+                 plot.title = element_text(hjust = 0.5),
+                 legend.position = "bottom")
+
+# Cell type
+plot_list[[2]] = Seurat::DimPlot(sobj, group.by = "cell_type",
+                                 reduction = name2D,
+                                 cols = color_markers) +
+  ggplot2::labs(title = "Cell type") +
+  Seurat::NoAxes() +
+  ggplot2::theme(aspect.ratio = 1,
+                 plot.title = element_text(hjust = 0.5),
+                 legend.position = "bottom")
+
+# Cluster
+plot_list[[3]] = Seurat::DimPlot(sobj, group.by = "seurat_clusters",
+                                 reduction = name2D,
+                                 label = TRUE) +
+  ggplot2::labs(title = "Clusters") +
+  Seurat::NoAxes() + Seurat::NoLegend() +
+  ggplot2::theme(aspect.ratio = 1,
+                 plot.title = element_text(hjust = 0.5))
+
+# Cluster type
+plot_list[[4]] = Seurat::DimPlot(sobj, group.by = "cluster_type",
+                                 reduction = name2D,
+                                 cols = color_markers) +
+  ggplot2::labs(title = "Cluster type") +
+  Seurat::NoAxes() +
+  ggplot2::theme(aspect.ratio = 1,
+                 plot.title = element_text(hjust = 0.5),
+                 legend.position = "none")
+
+patchwork::wrap_plots(plot_list, nrow = 2)
+```
+
+We keep tumor cells based on cluster annotation.
+
+```{r is_of_interest}
+sobj$is_of_interest = (sobj$cluster_type == "tumor cells")
+```
+
+
+## Subset dataset
+
+```{r subset_sobj}
+sobj = subset(sobj, is_of_interest)
 sobj
 ```
+We clean the dataset :
 
-## Metadata
+
+```{r diet_sobj}
+sobj = Seurat::DietSeurat(sobj)
+sobj
+```
 
 How many cells by sample ?
 
@@ -400,9 +243,18 @@ aquarius::plot_barplot(df = table(sobj$project_name) %>%
 ```
 
 
-## Projection
+# Processing
 
-We normalize the count matrix for remaining cells :
+## Normalization
+
+We remove genes that are expressed in less than 5 cells :
+
+```{r filter_genes}
+sobj = aquarius::filter_features(sobj, min_cells = 5)
+sobj
+```
+
+We normalize gene expression :
 
 ```{r normalization}
 sobj = Seurat::NormalizeData(sobj,
@@ -413,326 +265,278 @@ sobj = Seurat::ScaleData(sobj)
 sobj
 ```
 
-We remove batch-effect using FastMNN :
+## Non-corrected projection
+
+We perform a PCA :
+
+```{r pca}
+sobj = Seurat::RunPCA(sobj,
+                      assay = "RNA",
+                      reduction.name = "RNA_pca",
+                      npcs = 100,
+                      seed.use = 1337L)
+sobj
+```
+
+We choose the number of dimensions such that they summarize 60 % of the variability :
+
+```{r ndims}
+stdev = sobj@reductions[["RNA_pca"]]@stdev
+stdev_prop = cumsum(stdev)/sum(stdev)
+ndims = which(stdev_prop > 0.60)[1]
+ndims
+```
+
+We can visualize this on the elbow plot :
+
+```{r elbowplot, fig.width = 12, fig.height = 4}
+elbow_p = Seurat::ElbowPlot(sobj, ndims = 100, reduction = "RNA_pca") +
+  ggplot2::geom_point(x = ndims, y = stdev[ndims], col = "red")
+x_text = ggplot_build(elbow_p)$layout$panel_params[[1]]$x$get_labels() %>% as.numeric()
+elbow_p = elbow_p +
+  ggplot2::scale_x_continuous(breaks = sort(c(x_text, ndims)), limits = c(0, 100))
+x_color = ifelse(ggplot_build(elbow_p)$layout$panel_params[[1]]$x$get_labels() %>%
+                   as.numeric() %>% round(., 2) == round(ndims, 2), "red", "black")
+elbow_p = elbow_p +
+  ggplot2::theme_classic() +
+  ggplot2::theme(axis.text.x = element_text(color = x_color))
+
+elbow_p
+```
+
+We generate a tSNE and a UMAP with `r ndims` principal components :
+
+```{r tsne_umap}
+sobj = Seurat::RunTSNE(sobj,
+                       reduction = "RNA_pca",
+                       dims = 1:ndims,
+                       seed.use = 1337L,
+                       num_threads = n_threads, # Rtsne::Rtsne option
+                       reduction.name = paste0("RNA_pca_", ndims, "_tsne"))
+
+sobj = Seurat::RunUMAP(sobj,
+                       reduction = "RNA_pca",
+                       dims = 1:ndims,
+                       seed.use = 1337L,
+                       reduction.name = paste0("RNA_pca_", ndims, "_umap"))
+```
+
+We can visualize the two representations. There is a batch effect :
+
+```{r see_umap_tsne, fig.width = 8, fig.height = 4, class.source = "fold-hide"}
+tsne = Seurat::DimPlot(sobj, group.by = "project_name",
+                       reduction = paste0("RNA_pca_", ndims, "_tsne")) +
+  ggplot2::scale_color_manual(values = sample_info$color,
+                              breaks = sample_info$project_name) +
+  Seurat::NoAxes() + ggplot2::ggtitle("PCA - tSNE") +
+  ggplot2::theme(aspect.ratio = 1,
+                 plot.title = element_text(hjust = 0.5),
+                 legend.position = "none")
+
+umap = Seurat::DimPlot(sobj, group.by = "project_name",
+                       reduction = paste0("RNA_pca_", ndims, "_umap")) +
+  ggplot2::scale_color_manual(values = sample_info$color,
+                              breaks = sample_info$project_name) +
+  Seurat::NoAxes() + ggplot2::ggtitle("PCA - UMAP") +
+  ggplot2::theme(aspect.ratio = 1,
+                 plot.title = element_text(hjust = 0.5))
+
+tsne | umap
+```
+
+
+## Batch-effect correction
+
+We remove sample-specific effect with FastMNN :
 
 ```{r fastmnn}
-sobj_mnn = Seurat::SplitObject(sobj, split.by = "project_name")
+sobj_mnn = Seurat::SplitObject(sobj,
+                               split.by = "project_name")
 sobj_mnn = aquarius::integration_fastmnn(object.list = sobj_mnn,
                                          assay = "RNA",
-                                         verbose = TRUE)
+                                         verbose = TRUE,
+                                         d = 100)
 
 sobj@assays[["mnn.reconstructed"]] = sobj_mnn@assays[["mnn.reconstructed"]]
 sobj@reductions[["mnn"]] = sobj_mnn@reductions[["mnn"]]
+reduction_name = "mnn"
 
 rm(sobj_mnn)
 
 sobj
 ```
-
-We generate a diffusion map :
-
-```{r diffusion_map, time_it = TRUE}
-sobj = aquarius::run_diffusion_map(sobj = sobj,
-                                   input = "mnn",
-                                   seed = 1337L,
-                                   verbose = TRUE,
-                                   n_eigs = 50,
-                                   suppress_dpt = TRUE,
-                                   return_dm = FALSE)
-```
-
-We visualize the diffusion map :
-
-```{r see_dm, fig.width = 8, fig.height = 7}
-Seurat::DimPlot(sobj, group.by = "project_name",
-                reduction = "mnn_dm", dims = c(1,6)) +
-  ggplot2::scale_color_manual(values = sample_info$color,
-                              breaks = sample_info$project_name) +
-  Seurat::NoAxes() + ggplot2::ggtitle("RNA - mnn - DM") +
-  ggplot2::theme(aspect.ratio = 1,
-                 plot.title = element_text(hjust = 0.5)) +
-  ggplot2::guides(color = guide_legend(override.aes = list(size = 3), ncol = 1))
-```
-
-
-We generate a UMAP from the diffusion map :
-
-```{r mnn_dm_umap}
-ndims = 49
-sobj = Seurat::RunUMAP(sobj,
-                       reduction = "mnn_dm",
-                       dims = 1:ndims,
-                       seed.use = 1337L,
-                       reduction.name = paste0("mnn_dm_", ndims, "_umap"))
-```
-
-## Visualization
-
-We visualize this representation :
-
-```{r see_umap_tsne, fig.width = 8, fig.height = 7}
-Seurat::DimPlot(sobj, group.by = "project_name",
-                reduction = paste0("mnn_dm_", ndims, "_umap")) +
-  ggplot2::scale_color_manual(values = sample_info$color,
-                              breaks = sample_info$project_name) +
-  Seurat::NoAxes() + ggplot2::ggtitle("RNA - mnn - DM - UMAP") +
-  ggplot2::theme(aspect.ratio = 1,
-                 plot.title = element_text(hjust = 0.5)) +
-  ggplot2::guides(color = guide_legend(override.aes = list(size = 3), ncol = 1))
-```
-
-There is a competition between fibroblasts and tumor cells annotation. Maybe we mis-selected cells, and there are fibroblasts in this representation. We visualize the annotation :
-
-```{r see_dm_umap_celltype, fig.width = 8, fig.height = 7}
-Seurat::DimPlot(sobj, group.by = "cell_type",
-                reduction = paste0("mnn_dm_", ndims, "_umap"),
-                cols = color_markers) +
-  Seurat::NoAxes() + ggplot2::ggtitle("RNA - mnn - DM - UMAP") +
-  ggplot2::theme(aspect.ratio = 1,
-                 plot.title = element_text(hjust = 0.5)) +
-  ggplot2::guides(color = guide_legend(override.aes = list(size = 3), ncol = 1))
-```
-
-We make a representation split by origin :
-
-```{r plot_split2, fig.width = 12, fig.height = 17}
-plot_list = aquarius::plot_split_dimred(sobj,
-                                        reduction = paste0("mnn_dm_", ndims, "_umap"),
-                                        split_by = "project_name",
-                                        split_color = sample_info$color,
-                                        group_by = "cell_type",
-                                        group_color = color_markers)
-
-patchwork::wrap_plots(plot_list, ncol = 4) +
-  patchwork::plot_layout(guides = "collect") &
-  guides(color = guide_legend(override.aes = list(size = 4), title = "Cell type"))
-```
-
-
-# Re-extraction
 
 ## Clustering
 
-We make a clustering on the diffusion map :
+We make a clustering on the batch-effect corrected space :
 
-```{r clustering_mnn_dm, fig.width = 8, fig.height = 7}
-sobj = Seurat::FindNeighbors(sobj, reduction = "mnn_dm", dims = c(1:ndims))
+```{r clustering}
+sobj = Seurat::FindNeighbors(sobj, reduction = reduction_name)
 sobj = Seurat::FindClusters(sobj, resolution = 1)
+```
 
-Seurat::DimPlot(sobj, reduction = paste0("mnn_dm_", ndims, "_umap"),
-                group.by = "seurat_clusters", label = TRUE) +
-  Seurat::NoAxes() + Seurat::NoLegend() +
-  ggplot2::labs(title = "Cluster ID") +
+## UMAP and tSNE
+
+To visualize subpopulations, we run UMAP and tSNE :
+
+```{r mnn_tsne_umap}
+sobj = Seurat::RunTSNE(sobj,
+                       reduction = reduction_name,
+                       dims = 1:ndims,
+                       seed.use = 1337L,
+                       num_threads = n_threads, # Rtsne::Rtsne option
+                       reduction.name = paste0(reduction_name, "_", ndims, "_tsne"))
+
+sobj = Seurat::RunUMAP(sobj,
+                       reduction = reduction_name,
+                       dims = 1:ndims,
+                       seed.use = 1337L,
+                       reduction.name = paste0(reduction_name, "_", ndims, "_umap"))
+```
+
+We can visualize the two representations :
+
+```{r see_mnn_umap_tsne, fig.width = 8, fig.height = 4}
+tsne = Seurat::DimPlot(sobj, group.by = "project_name",
+                       reduction = paste0(reduction_name, "_", ndims, "_tsne")) +
+  ggplot2::scale_color_manual(values = sample_info$color,
+                              breaks = sample_info$project_name) +
+  Seurat::NoAxes() + ggplot2::ggtitle("MNN - tSNE") +
+  ggplot2::theme(aspect.ratio = 1,
+                 plot.title = element_text(hjust = 0.5),
+                 legend.position = "none")
+
+umap = Seurat::DimPlot(sobj, group.by = "project_name",
+                       reduction = paste0(reduction_name, "_", ndims, "_umap")) +
+  ggplot2::scale_color_manual(values = sample_info$color,
+                              breaks = sample_info$project_name) +
+  Seurat::NoAxes() + ggplot2::ggtitle("MNN - UMAP") +
   ggplot2::theme(aspect.ratio = 1,
                  plot.title = element_text(hjust = 0.5))
-```
 
-We manually subset cells based on clustering :
-
-```{r extract_clusters, fig.width = 8, fig.height = 7}
-sobj$choosen = sobj$seurat_clusters %in% c(46,23,16,35,32,29,37,8,3,42,
-                                           17,25,47,34,31,40,39,51,20,
-                                           45,7,49,21,15,18,2,36,38,12,
-                                           13,6,50,1,11)
-
-Seurat::DimPlot(sobj, reduction = paste0("mnn_dm_", ndims, "_umap"), group.by = "choosen") +
-  Seurat::NoAxes() +
-  ggplot2::labs(title = "Choosen clusters (tumor cells ?)") +
-  ggplot2::theme(aspect.ratio = 1,
-                 plot.title = element_text(hjust = 0.5))
-```
-
-## Selection
-
-We keep only cells of interest :
-
-```{r re_subset}
-sobj = subset(sobj, choosen)
-sobj
-```
-
-We remove all projections :
-
-```{r remove_reductions}
-sobj@reductions[names(sobj@reductions)] = NULL
-sobj
-```
-
-How many cells by sample ?
-
-```{r table_orig_ident2}
-table(sobj$project_name)
-```
-
-## Processing
-
-We remove genes that are expressed in less than 5 cells :
-
-```{r filter_genes2}
-sobj = aquarius::filter_features(sobj, min_cells = 5)
-sobj
+tsne | umap
 ```
 
 
-We normalize the count matrix for remaining cells :
+## Trajectory projection
 
-```{r normalization2}
-sobj = Seurat::NormalizeData(sobj,
-                             normalization.method = "LogNormalize")
-sobj = Seurat::FindVariableFeatures(sobj, nfeatures = 2000)
-sobj = Seurat::ScaleData(sobj)
+Just for the visualization, we generate a diffusion map :
 
-sobj
-```
-
-We remove batch-effect using FastMNN :
-
-```{r fastmnn2}
-sobj_mnn = Seurat::SplitObject(sobj, split.by = "project_name")
-sobj_mnn = aquarius::integration_fastmnn(object.list = sobj_mnn,
-                                         assay = "RNA",
-                                         verbose = TRUE)
-
-sobj@assays[["mnn.reconstructed"]] = sobj_mnn@assays[["mnn.reconstructed"]]
-sobj@reductions[["mnn"]] = sobj_mnn@reductions[["mnn"]]
-
-rm(sobj_mnn)
-
-sobj
-```
-
-We generate a diffusion map :
-
-```{r diffusion_map2, time_it = TRUE}
+```{r dm, fig.width = 8, fig.height = 8}
 sobj = aquarius::run_diffusion_map(sobj = sobj,
-                                   input = "mnn",
+                                   input = reduction_name,
                                    seed = 1337L,
                                    verbose = TRUE,
                                    n_eigs = 50,
                                    suppress_dpt = TRUE,
                                    return_dm = FALSE)
-```
 
-We visualize the diffusion map :
+dm_name = paste0(reduction_name, "_dm")
 
-```{r see_dm2, fig.width = 8, fig.height = 7}
-Seurat::DimPlot(sobj, group.by = "project_name",
-                reduction = "mnn_dm", dims = c(1,5)) +
+Seurat::DimPlot(sobj, reduction = dm_name,
+                dims = c(2,4),
+                group.by = "orig.ident") +
   ggplot2::scale_color_manual(values = sample_info$color,
-                              breaks = sample_info$project_name) +
-  Seurat::NoAxes() + ggplot2::ggtitle("RNA - mnn - DM") +
+                              breaks = sample_info$sample_identifiant) +
+  ggplot2::labs(title = dm_name) +
   ggplot2::theme(aspect.ratio = 1,
                  plot.title = element_text(hjust = 0.5)) +
-  ggplot2::guides(color = guide_legend(override.aes = list(size = 3), ncol = 1))
+  Seurat::NoAxes()
 ```
 
+We generate a UMAP from this diffusion map :
 
-We generate a UMAP from the diffusion map :
+```{r dm_umap}
+umap_dm_dims = 16
 
-```{r mnn_dm_umap2}
-ndims = 8
-sobj = Seurat::RunUMAP(sobj,
-                       reduction = "mnn_dm",
-                       dims = 1:ndims,
-                       seed.use = 1337L,
-                       reduction.name = paste0("mnn_dm_", ndims, "_umap"))
-```
-
-## Visualization
-
-We visualize this representation :
-
-```{r see_umap_tsne2, fig.width = 8, fig.height = 7}
-Seurat::DimPlot(sobj, group.by = "project_name",
-                reduction = paste0("mnn_dm_", ndims, "_umap")) +
-  ggplot2::scale_color_manual(values = sample_info$color,
-                              breaks = sample_info$project_name) +
-  Seurat::NoAxes() + ggplot2::ggtitle("RNA - mnn - DM - UMAP") +
-  ggplot2::theme(aspect.ratio = 1,
-                 plot.title = element_text(hjust = 0.5)) +
-  ggplot2::guides(color = guide_legend(override.aes = list(size = 3), ncol = 1))
-```
-
-We visualize the annotation :
-
-```{r see_dm_umap_celltype2, fig.width = 8, fig.height = 7}
-Seurat::DimPlot(sobj, group.by = "cell_type",
-                reduction = paste0("mnn_dm_", ndims, "_umap"),
-                cols = color_markers) +
-  Seurat::NoAxes() + ggplot2::ggtitle("RNA - mnn - DM - UMAP") +
-  ggplot2::theme(aspect.ratio = 1,
-                 plot.title = element_text(hjust = 0.5)) +
-  ggplot2::guides(color = guide_legend(override.aes = list(size = 3), ncol = 1))
-```
-
-We make a representation split by origin :
-
-```{r plot_split, fig.width = 12, fig.height = 17}
-plot_list = aquarius::plot_split_dimred(sobj,
-                                        reduction = paste0("mnn_dm_", ndims, "_umap"),
-                                        split_by = "project_name",
-                                        split_color = sample_info$color,
-                                        group_by = "cell_type",
-                                        group_color = color_markers)
-
-patchwork::wrap_plots(plot_list, ncol = 4) +
-  patchwork::plot_layout(guides = "collect") &
-  guides(color = guide_legend(override.aes = list(size = 4), title = "Cell type"))
-```
-
-
-# Features
-
-We represent expression level for genes of interest on the projection. We build a custom function to build a feature plot, and make a word cloud plot as top right corner inset :
-
-```{r plot_feature, class.source = "fold-hide"}
-name2D = paste0("mnn_dm_", ndims, "_umap")
-  
-plot_feature = function(gene) {
-  ## Feature Plot
-  p1 = Seurat::FeaturePlot(sobj, features = gene, reduction = name2D) +
-    ggplot2::scale_color_gradientn(colors = aquarius::color_gene) +
-    ggplot2::theme(aspect.ratio = 1) +
-    Seurat::NoAxes()
-  
-  ## Word Cloud
-  df = data.frame(project_name = levels(sobj$project_name),
-                  row.names = levels(sobj$project_name))
-  cells_associated_id = sobj@meta.data[Seurat::FetchData(sobj, gene)[, 1] > 0, "project_name"]
-  df$number_cells_yes = table(cells_associated_id)[rownames(df)] %>% as.vector()
-  df$number_cells_total = table(sobj$project_name)[rownames(df)] %>% as.vector()
-  df$prop_cells = df$number_cells_yes/df$number_cells_total
-  
-  p2 = ggplot2::ggplot(df, aes(label = project_name, size = prop_cells, color = project_name)) +
-    ggwordcloud::geom_text_wordcloud(seed = 123) +
-    ggplot2::scale_color_manual(values = sample_info$color,
-                                breaks = sample_info$project_name) +
-    ggplot2::scale_size_area(max_size = 7) +
-    ggplot2::theme_minimal()
-  
-  ## Patchwork
-  p = p1 +
-    patchwork::inset_element(p2,
-                             left = 0.75, bottom = 0.75,
-                             right = 1.17, top = 1.12)
-  
-  p = patchwork::wrap_plots(list(p1, p2), heights = c(5,1), ncol = 1)
-  
-  return(p)
+if (paste0(dm_name, "_umap") %in% names(sobj@reductions)) {
+  sobj[[paste0(dm_name, "_umap")]] = NULL
 }
+sobj = Seurat::RunUMAP(sobj, reduction = dm_name,
+                       dims = 1:umap_dm_dims,
+                       reduction.name = paste0(dm_name, "_umap"),
+                       verbose = TRUE, seed.use = 1337L)
 ```
 
-```{r SOX9, fig.width = 12, fig.height = 85}
-genes = c("SOX10", "SOX9", "MGP", "DCN",
-          "ERBB3", "ERBB2", "PLP1", "KCNA1", "KCNA2",
-          "CRABP1", "PDGFRA", "PDGFRB", "PDGFA", "PDGFB",
-          "MIF", "TAGLN", "TAGLN2", "ACTA2",
-          "ZEB1", "ZEB2", "ALDH1A1", "NES", "ENG", "DLK1")
+We represent sample of origin on this projection :
 
-plot_list = lapply(genes, FUN = plot_feature)
-
-patchwork::wrap_plots(plot_list, ncol = 2)
+```{r dm_umap_visu, fig.width = 8, fig.height = 8}
+Seurat::DimPlot(sobj, reduction = paste0(dm_name, "_umap"),
+                group.by = "project_name") +
+  ggplot2::scale_color_manual(values = sample_info$color,
+                              breaks = sample_info$sample_identifiant) +
+  ggplot2::labs(title = paste0(dm_name, "_umap")) +
+  ggplot2::theme(aspect.ratio = 1,
+                 plot.title = element_text(hjust = 0.5)) +
+  Seurat::NoAxes()
 ```
+
+
+# Visualization
+
+We use this projection :
+
+```{r name2D}
+name2D = paste0(reduction_name, "_", ndims, "_umap")
+```
+
+This is the clustering :
+
+```{r see_clusters, fig.width = 8, fig.height = 8}
+Seurat::DimPlot(sobj, reduction = name2D,
+                group.by = "seurat_clusters", label = TRUE) +
+  ggplot2::labs(title = name2D) +
+  ggplot2::theme(aspect.ratio = 1,
+                 plot.title = element_text(hjust = 0.5)) +
+  Seurat::NoAxes()
+```
+
+This is the trajectory UMAP, colored by sample of origin :
+
+```{r project_name, fig.width = 8, fig.height = 8}
+Seurat::DimPlot(sobj, reduction = name2D,
+                group.by = "project_name") +
+  ggplot2::scale_color_manual(values = sample_info$color,
+                              breaks = sample_info$sample_identifiant) +
+  ggplot2::labs(title = name2D) +
+  ggplot2::theme(aspect.ratio = 1,
+                 plot.title = element_text(hjust = 0.5)) +
+  Seurat::NoAxes()
+```
+
+Where are cells from each dataset ?
+
+```{r tumor_split_by_origin, fig.width = 12, fig.height = 7}
+# Build plots
+plot_list = aquarius::plot_split_dimred(
+  sobj = sobj,
+  reduction = name2D,
+  split_by = "project_name",
+  split_color = setNames(nm = sample_info$project_name,
+                         sample_info$color))
+
+# Patchwork
+patchwork::wrap_plots(plot_list, nrow = 3) &
+  ggplot2::theme(legend.position = "none")
+```
+
+We represent XIST expression levels :
+
+```{r xist_split_by_origin, fig.width = 12, fig.height = 7}
+# Build plots
+plot_list = aquarius::plot_split_dimred(
+  sobj = sobj,
+  reduction = paste0(reduction_name, "_", ndims, "_umap"),
+  split_by = "project_name",
+  split_color = setNames(nm = sample_info$project_name,
+                         sample_info$color),
+  color_by = "XIST")
+
+# Patchwork
+patchwork::wrap_plots(plot_list, nrow = 3) &
+  ggplot2::theme(legend.position = "none")
+```
+
 
 # Save
 

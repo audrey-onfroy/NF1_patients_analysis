@@ -17,10 +17,6 @@ body {
 text-align: justify}
 </style>
 
-```{r clean, echo = FALSE}
-rm(list = ls())
-```
-
 <!-- Automatically computes and prints in the output the running time for any code chunk -->
 ```{r, echo=FALSE}
 # https://github.com/rstudio/rmarkdown/issues/1453
@@ -47,9 +43,9 @@ knitr::knit_hooks$set(
     function(before, options) {
       if (options$time_it) {
         if (before) {
-          now <= as.numeric(Sys.time())
+          now <<- Sys.time()
         } else {
-          res = as.numeric(Sys.time()) - now # seconds
+          res = difftime(Sys.time(), now, units = "secs")
           paste("(Time to run :", round(res, digits = 2), "s)")
         }
       }
@@ -82,13 +78,14 @@ knitr::opts_chunk$set(echo = TRUE, # display code
                       time_it = FALSE)
 ```
 
-
 This script is used to infer trajectory on tumor cells, using TInGa.
 
 ```{r library}
 library(dplyr)
 library(patchwork)
 library(ggplot2)
+
+.libPaths()
 ```
 
 
@@ -97,51 +94,28 @@ library(ggplot2)
 In this section, we set the global settings of the analysis. We will store data there :
 
 ```{r out_dir}
-save_name = "tumor_patients"
-out_dir = "/home/aurelien/Documents/Audrey/git_analysis/mpnst_project/6_tumor_cells_patients/"
+save_name = "patients_tumor_cells"
+out_dir = "."
 ```
 
 We load the sample information :
 
-```{r custom_palette_sample, fig.width = 10, fig.height = 1}
-sample_info = readRDS(file = paste0(out_dir, "/../4_combined_patients/all_patients_sample_info.rds"))
-
+```{r custom_palette_sample, fig.width = 8, fig.height = 8}
+sample_info = readRDS(file = paste0(out_dir, "/../1_metadata/patients_sample_info.rds"))
 project_names_oi = as.character(sample_info$project_name)
 
-ggplot2::ggplot(sample_info) +
-  ggplot2::geom_label(aes(x = project_name, y = 0, label = project_name, fill = project_name)) +
-  ggplot2::geom_text(aes(x = project_name, y = 1, label = sample_identifier)) +
-  ggplot2::lims(y = c(-1, 2)) +
-  ggplot2::scale_fill_manual(values = sample_info$color, breaks = sample_info$project_name) +
-  ggplot2::theme_void() +
-  ggplot2::theme(legend.position = "none")
-```
-
-Here are custom colors for each cell type :
-
-```{r color_markers, fig.width = 10, fig.height = 1, class.source = "fold-hide"}
-color_markers = readRDS(paste0(out_dir, "/../1_metadata/datasets_color_markers.rds"))
-
-data.frame(cell_type = names(color_markers),
-           color = unlist(color_markers)) %>%
-  ggplot2::ggplot(., aes(x = cell_type, y = 0, fill = cell_type)) +
-  ggplot2::geom_point(pch = 21, size = 5) +
-  ggplot2::scale_fill_manual(values = unlist(color_markers), breaks = names(color_markers)) +
-  ggplot2::theme_classic() +
-  ggplot2::theme(legend.position = "none",
-                 axis.line = element_blank(),
-                 axis.title = element_blank(),
-                 axis.ticks = element_blank(),
-                 axis.text.y = element_blank())
+graphics::pie(rep(1, nrow(sample_info)),
+              col = sample_info$color,
+              labels = sample_info$project_name)
 ```
 
 This are the settings for trajectory inference :
 
 ```{r traj_settings}
-traj_dimred = "mnn"
-traj_umap = "mnn_dm_8_umap"
+traj_dimred = "mnn"          # to infer trajectory on
+traj_umap = "mnn_39_umap"    # just of visualization
 seed = 1337L
-traj_max_dims = 50
+traj_max_dims = 39           # to infer trajectory on
 ```
 
 We load the Seurat object :
@@ -157,7 +131,7 @@ sobj
 We set the root manually :
 
 ```{r root_cell, fig.width = 7, fig.height = 7}
-root_cell_id = "GSM5404032_CGATGCGGTTGAATCC-1"
+root_cell_id = "GSM5404032_CAACCAATCCCGAGAC-1"
 sobj$is_root = colnames(sobj) == root_cell_id
 sobj$cell_name = colnames(sobj)
 root_plot = aquarius::plot_label_dimplot(sobj, reduction = traj_umap,
@@ -173,9 +147,10 @@ sobj$cell_name = NULL
 
 root_plot
 ```
+
 Now, we perform the trajectory inference :
 
-```{r tinga, cache = FALSE}
+```{r tinga, cache = FALSE, time_it = TRUE}
 set.seed(seed)
 my_traj = aquarius::traj_tinga(sobj,
                                seed = seed,
@@ -194,11 +169,11 @@ sobj$pseudotime = my_traj$pseudotime
 
 # Visualization
 
-We can visualize pseudotime :
+We visualize pseudotime :
 
 ```{r pseudotime1, fig.width = 8, fig.height = 8}
 Seurat::FeaturePlot(sobj, features = "pseudotime",
-                    reduction = traj_umap,
+                    reduction = "mnn_dm_umap",
                     cols = viridis::viridis(n = 100)) +
   ggplot2::ggtitle("Pseudotime") +
   ggplot2::theme(aspect.ratio = 1,
@@ -212,7 +187,7 @@ We visualize the trajectory with arrows :
 dynplot::plot_dimred(trajectory = my_traj,
                      label_milestones = TRUE,
                      plot_trajectory = TRUE,
-                     dimred = sobj[[traj_umap]]@cell.embeddings,
+                     dimred = sobj[["mnn_dm_umap"]]@cell.embeddings,
                      color_cells = 'pseudotime', color_trajectory = "none")
 ```
 
@@ -222,7 +197,7 @@ dynplot::plot_dimred(trajectory = my_traj,
 We save the Seurat object :
 
 ```{r save_sobj}
-saveRDS(sobj, file = paste0(out_dir, "/", save_name, "_sobj_traj.rds"))
+saveRDS(sobj, file = paste0(out_dir, "/", save_name, "_sobj_traj_tinga.rds"))
 ```
 
 
