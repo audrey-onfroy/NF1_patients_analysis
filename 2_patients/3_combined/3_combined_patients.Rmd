@@ -225,6 +225,7 @@ We build a list of count matrix :
 
 ```{r count_matrix_list}
 count_matrix_list = lapply(names(sobj_list), FUN = function(one_sample) {
+  print(one_sample)
   one_sobj = sobj_list[[one_sample]]
   
   # Load correspondence between gene name and Ensembl ID
@@ -333,10 +334,11 @@ count_matrix = count_matrix_list %>%
 
 dim(count_matrix)
 ```
+
 We clean the list :
 
 ```{r clean_count_matrix_list}
-rm(count_matrix_list, features_df)
+rm(count_matrix_list)
 ```
 
 
@@ -363,6 +365,15 @@ identical(colnames(count_matrix),
           rownames(metadata))
 ```
 
+To add Ensembl ID in genes metadata, we subset the `features_df` dataframe to the common Ensembl ID :
+
+```{r subset_features_df}
+features_df = features_df[common_EnsemblID, ]
+
+dim(features_df)
+head(features_df)
+```
+
 
 ### Build Seurat object
 
@@ -375,10 +386,21 @@ sobj = Seurat::CreateSeuratObject(counts = count_matrix,
 sobj
 ```
 
+We add the correspondence between gene names and gene ID :
+
+```{r add_features_df}
+rownames(features_df) = rownames(sobj) # not features_df$gene_name because duplicates are renamed by Seurat
+
+sobj@assays$RNA@meta.features = features_df
+
+head(sobj@assays$RNA@meta.features)
+```
+
+
 We remove the list of objects :
 
 ```{r clean_sobj_list}
-rm(sobj_list, count_matrix, metadata)
+rm(sobj_list, count_matrix, metadata, features_df)
 ```
 
 We set factor levels in metadata :
