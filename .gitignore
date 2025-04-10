@@ -1,0 +1,9 @@
+# Larges file format
+**gz
+**rds
+
+# R-related
+.Rhistory
+
+# Folder with the PNG and PDF figures
+**figures_detail**
