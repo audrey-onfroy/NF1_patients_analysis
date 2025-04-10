@@ -1,0 +1,860 @@
+---
+title: "Figures from Brunet *et al.*"
+author: "Audrey"
+date: "`r format(Sys.time(), '%Y-%m-%d')`"
+output:
+  html_document:
+    code_folding: show
+    code_download: true
+    toc: true
+    toc_float: true
+    number_sections: false
+---
+
+<style>
+body {
+text-align: justify}
+</style>
+
+<!-- Automatically computes and prints in the output the running time for any code chunk -->
+```{r, echo=FALSE}
+# https://github.com/rstudio/rmarkdown/issues/1453
+hooks = knitr::knit_hooks$get()
+hook_foldable = function(type) {
+  force(type)
+  function(x, options) {
+    res = hooks[[type]](x, options)
+    
+    if (isFALSE(options[[paste0("fold_", type)]])) return(res)
+    
+    paste0(
+      "<details><summary>", "show", "</summary>\n\n",
+      res,
+      "\n\n</details>"
+    )
+  }
+}
+knitr::knit_hooks$set(
+  output = hook_foldable("output"),
+  plot = hook_foldable("plot"),
+  time_it = local({
+    now = NULL
+    function(before, options) {
+      if (options$time_it) {
+        if (before) {
+          now <<- Sys.time()
+        } else {
+          res = difftime(Sys.time(), now, units = "secs")
+          paste("(Time to run :", round(res, digits = 2), "s)")
+        }
+      }
+    }
+  })
+)
+```
+
+<!-- Set default parameters for all chunks -->
+```{r, setup, include = FALSE}
+set.seed(1337L)
+knitr::opts_chunk$set(echo = TRUE, # display code
+                      # display chunk output
+                      message = FALSE,
+                      warning = FALSE,
+                      fold_output = FALSE, # usefull for sessionInfo()
+                      fold_plot = FALSE,
+                      
+                      # figure settings
+                      fig.align = 'center',
+                      fig.width = 20,
+                      fig.height = 15,
+                      
+                      # something about seed, chunk and Rmarkdown compilation
+                      # https://stackoverflow.com/questions/39417003/long-vectors-not-supported-yet-error-in-rmd-but-not-in-r-script
+                      # cache = TRUE,
+                      cache.lazy = FALSE, 
+                      
+                      # add runtime after chunk
+                      time_it = FALSE,
+                      
+                      # save figures in PDF in a separate folder
+                      # https://stackoverflow.com/questions/27992239/knitr-include-figures-in-report-and-output-figures-to-separate-files
+                      dev = c('png', 'pdf'), # tiff or pdf alone renders bad in html
+                      # dpi = 300,
+                      fig.path = "figures_detail/",
+                      pdf.options(encoding = "ISOLatin9.enc"))
+```
+
+
+In this file, we make the scRNAseq figures for the paper.
+
+```{r library}
+library(dplyr)
+library(patchwork)
+library(ggplot2)
+library(ComplexHeatmap)
+
+.libPaths()
+```
+
+# Settings
+
+Analyses are stored here :
+
+```{r locations}
+analysis_dir = "./../"
+
+list.files(analysis_dir)
+```
+
+Output files will be stored there :
+
+```{r out_dir}
+out_dir = "./data/"
+
+if (!dir.exists(out_dir)) {
+  dir.create(out_dir)
+}
+```
+
+## Annotations
+
+These are all the samples analysed :
+
+```{r figZ_1, class.source = 'fold-hide', fig.width = 10, fig.height = 7}
+sample_info = readRDS(paste0(analysis_dir, "/1_metadata/patients_sample_info.rds"))
+plot_list = aquarius::fig_plot_gb(sample_info, title = "NF1 patients datasets")
+
+# patchwork
+patchwork::wrap_plots(plot_list) +
+  patchwork::plot_layout(nrow = length(plot_list), heights = c(0.1,4)) &
+  ggplot2::theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 15))
+```
+
+We load custom colors for cell types :
+
+```{r color_markers, fig.width = 7, fig.height = 7}
+color_markers = readRDS(paste0(analysis_dir, "/1_metadata/patients_color_markers.rds"))
+
+graphics::pie(rep(1, length(color_markers)),
+              col = unlist(color_markers),
+              labels = names(color_markers))
+```
+
+We load gene name to assess cell type annotation on a dotplot :
+
+```{r dotplot_markers}
+dotplot_markers = readRDS(paste0(analysis_dir, "/1_metadata/patients_dotplot_markers.rds"))
+
+lengths(dotplot_markers)
+```
+
+We define custom colors for tumor type :
+
+```{r tumor_type_colors}
+tumor_type_colors = c("pNF" = "#1c55b8",
+                      "dyNF" = "#95c595",
+                      "MPNST" = "#ad4fc5")
+```
+
+We load the list of cell markers to save as CSV for supplementary materials :
+
+```{r cell_markers}
+cell_markers = readRDS(paste0(analysis_dir, "/1_metadata/patients_cell_markers.rds"))
+max_nrows = max(lengths(cell_markers))
+cell_markers_df = lapply(c(1:length(cell_markers)), FUN = function(index_i) {
+  vec = cell_markers[[index_i]] %>%
+    sort()
+  vec = c(vec, rep(NA, max_nrows - length(vec)))
+  
+  df = vec %>%
+    as.data.frame()
+  colnames(df) = names(cell_markers)[index_i]
+  
+  return(df)
+}) %>%
+  do.call(cbind, .)
+
+head(cell_markers_df)
+```
+
+
+## Metadata
+
+In this section, we represent all the available information about patients. Information are coming from :
+
+* [Sun et al.](https://doi.org/10.1016/j.stem.2021.04.029) : materials and methods
+* [Wu et al.](https://doi.org/10.1126/sciadv.abo5442) : supplementary table S3
+
+```{r metadata_figure, fig.width = 12, fig.height = 6}
+sample_info_ht = sample_info %>%
+  dplyr::mutate(tumor_type = as.character(tumor_type)) %>%
+  dplyr::mutate(tumor_type = factor(tumor_type, levels = c("nNF", "pNF", "dyNF", "MPNST", "metastasis"))) %>%
+  dplyr::mutate(CDKN2A = case_when(project_name %in% c("GSM5404036", "GSM5404044") ~ "CN loss",
+                                   project_name %in% c("GSM5404038", "GSM5404041", "2020_12") ~ "normal",
+                                   project_name %in% c("2019_L", "2020_11") ~ "del hetero",
+                                   project_name %in% c("2020_21") ~ "del homo")) %>%
+  dplyr::mutate(TP53 = case_when(project_name %in% c("GSM5404036", "GSM5404044",
+                                                     "GSM5404038", "GSM5404041",
+                                                     "2019_L", "2020_11", "2020_21") ~ "normal",
+                                 project_name %in% c("2020_12") ~ "del hetero")) %>%
+  dplyr::mutate(PRC2 = case_when(project_name %in% c("GSM5404036", "GSM5404044",
+                                                     "GSM5404038", "GSM5404041",
+                                                     "2019_L", "2020_11") ~ "normal",
+                                 project_name %in% c("2020_12") ~ "del hetero SUZ12",
+                                 project_name %in% c("2020_21") ~ "del hetero EED + mut 43% SUZ12")) %>%
+  dplyr::mutate(chemotherapy = case_when(
+    project_name == "GSM5404035" ~ "Ifos/Dox 3 mo. earlier",
+    project_name == "GSM5404036" ~ "Ifos/Dox 4 mo. earlier + Ifos/Etop 2 mo. earlier",
+    project_name == "GSM5404040" ~ "Ifos/Dox",
+    project_name == "GSM5404042" ~ "Ifos/Dox 3 mo. earlier",
+    project_name == "GSM5404043" ~ "Ifos/Dox 3 mo. earlier",
+    project_name == "GSM5404044" ~ "Ifos/Dox 4 mo. earlier")) %>%
+  dplyr::mutate(chemotherapy = ifelse(is.na(chemotherapy) & origin %in% c("here", "Wu"),
+                                      yes = "No", no = chemotherapy)) %>%
+  dplyr::mutate(radiation = ifelse(project_name == "GSM5404035",
+                                   yes = "2 mo. earlier", no = NA)) %>%
+  dplyr::mutate(radiation = ifelse(is.na(radiation) & origin %in% c("here", "Wu"),
+                                   yes = "No", no = radiation)) %>%
+  dplyr::mutate(age = case_when(
+    project_name %in% c("GSE183308_1", "GSE183308_2", "GSE183308_3", "GSE183308_4") ~ 18,
+    project_name == "GSM5050721" ~ 19,
+    project_name == "2019_L" ~ 53,
+    project_name == "2020_11" ~ 22,
+    project_name == "2020_12" ~ 50,
+    project_name == "2020_21" ~ 25)) %>%
+  dplyr::arrange(tumor_type, origin, gender)
+
+# Heatmap colors
+list_colors = list()
+
+list_colors[["project_name"]] = setNames(sample_info_ht$color,
+                                         nm = sample_info_ht$project_name)
+list_colors[["tumor_type"]] = tumor_type_colors
+list_colors[["gender"]] = setNames(c("#FF9900", "#32CD32"),
+                                   nm = c("F", "M"))
+list_colors[["origin"]] = setNames(aquarius::gg_color_hue(length(unique(sample_info_ht$origin))),
+                                   nm = unique(sample_info_ht$origin))
+list_colors[["chemotherapy"]] = setNames(RColorBrewer::brewer.pal(
+  n = length(na.omit(unique(sample_info_ht$chemotherapy))), name = "Dark2"),
+  nm = na.omit(unique(sample_info_ht$chemotherapy)))
+list_colors[["chemotherapy"]][names(list_colors[["chemotherapy"]]) == "No"] = "lightgray"
+
+list_colors[["radiation"]] = setNames(RColorBrewer::brewer.pal(
+  n = length(na.omit(unique(sample_info_ht$radiation))), name = "Dark2")[c(1:2)],
+  nm = na.omit(unique(sample_info_ht$radiation)))
+list_colors[["radiation"]][names(list_colors[["radiation"]]) == "No"] = "lightgray"
+
+gene_status = sample_info_ht[, c("CDKN2A", "TP53", "PRC2")] %>%
+  unlist() %>% na.omit() %>% unique()
+list_colors[["gene_status"]] = setNames(aquarius::c30_palette[c(1:length(gene_status))],
+                                        nm = gene_status)
+list_colors[["gene_status"]][names(list_colors[["gene_status"]]) == "normal"] = "lightgray"
+
+# Heatmap annotation
+ha = ComplexHeatmap::HeatmapAnnotation(
+  project_name = sample_info_ht$project_name,
+  tumor_type = sample_info_ht$tumor_type,
+  origin = sample_info_ht$origin,
+  gender = sample_info_ht$gender,
+  age = anno_points(sample_info_ht$age, height = unit(2, "cm")),
+  CDKN2A = sample_info_ht$CDKN2A,
+  TP53 = sample_info_ht$TP53,
+  PRC2 = sample_info_ht$PRC2,
+  chemotherapy = sample_info_ht$chemotherapy,
+  radiation = sample_info_ht$radiation,
+  col = list(project_name = list_colors[["project_name"]],
+             tumor_type = list_colors[["tumor_type"]],
+             gender = list_colors[["gender"]],
+             origin = list_colors[["origin"]],
+             CDKN2A = list_colors[["gene_status"]],
+             TP53 = list_colors[["gene_status"]],
+             PRC2 = list_colors[["gene_status"]],
+             chemotherapy = list_colors[["chemotherapy"]],
+             radiation = list_colors[["radiation"]]),
+  show_legend = c(FALSE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE),
+  annotation_label = c("color", "tumor type", "origin", "gender (from XIST)",
+                       "age", "CDKN2A", "TP53", "PRC2", "chemotherapy", "radiation"),
+  na_col = "white")
+
+# Matrix
+empty_mat = matrix(nrow = 1, ncol = nrow(sample_info_ht), data = 0)
+colnames(empty_mat) = sample_info_ht$project_name
+
+# Heatmap
+ht = ComplexHeatmap::Heatmap(empty_mat,
+                             top_annotation = ha,
+                             cluster_rows = FALSE,
+                             cluster_columns = FALSE,
+                             height = unit(0, "cm"),
+                             column_names_rot = 40,
+                             column_names_side = "top")
+
+# Draw
+ComplexHeatmap::draw(ht,
+                     show_heatmap_legend = FALSE,
+                     legend_grouping = "original",
+                     annotation_legend_side = "bottom")
+```
+
+## Dataset
+
+We load the human dataset.
+
+```{r load_human_dataset}
+sobj = readRDS(paste0(analysis_dir, "/3_combined/all_patients_sobj.rds"))
+sobj
+```
+
+This is the projection of interest to visualize cells on :
+
+```{r name2D}
+name2D = "harmony_80_tsne"
+```
+
+We change the levels of cell types:
+
+```{r custom_levels_cell_type}
+custom_levels = c("tumor cells", "fibroblasts", "endothelial cells", "mural cells",
+                  "macrophages", "cDC", "T cells", "NK cells", "mast cells", "B cells")
+
+# In sobj
+sobj$cell_type = factor(as.character(sobj$cell_type),
+                        levels = custom_levels)
+table(sobj$cell_type, useNA = "ifany")
+
+# In color_markers
+color_markers = color_markers[custom_levels]
+
+# In dotplot_markers
+dotplot_markers = dotplot_markers[custom_levels]
+```
+
+We group cell type by cluster, to correct mis-annotation :
+
+```{r cluster_type}
+cluster_type = table(sobj$cell_type, sobj$seurat_clusters) %>%
+  prop.table(., margin = 2) %>%
+  apply(., 2, which.max)
+cluster_type = setNames(nm = names(cluster_type),
+                        levels(sobj$cell_type)[cluster_type])
+
+sobj$cluster_type = cluster_type[sobj$seurat_clusters]
+sobj$cluster_type = factor(sobj$cluster_type,
+                           levels = levels(sobj$cell_type))
+
+table(sobj$cluster_type)
+```
+
+
+# Figures
+
+## Annotation
+
+In this section, we visualize cell type annotation.
+
+### Single-cell level
+
+We look at the annotation :
+
+```{r see_cell_type_single, fig.width = 7, fig.height = 6}
+fig_cell_type = Seurat::DimPlot(sobj, group.by = "cell_type",
+                                reduction = name2D, cols = color_markers) +
+  Seurat::NoAxes() +
+  ggplot2::labs(title = "Cell Type",
+                subtitle = "single cell level annotation") +
+  ggplot2::theme(aspect.ratio = 1,
+                 plot.title = element_text(hjust = 0.5),
+                 plot.subtitle = element_text(hjust = 0.5),
+                 legend.position = "right")
+fig_cell_type
+```
+
+We look at the annotation, split by sample :
+
+```{r see_cell_type_split_single, fig.width = 15, fig.height = 10}
+plot_list = aquarius::plot_split_dimred(sobj,
+                                        reduction = name2D,
+                                        split_by = "project_name",
+                                        split_color = sample_info$color,
+                                        group_by = "cell_type",
+                                        group_color = color_markers)
+
+patchwork::wrap_plots(plot_list, nrow = 3) &
+  Seurat::NoLegend()
+```
+
+### Cluster level
+
+We visualize the clustering :
+
+```{r see_cluster, fig.width = 7, fig.height = 6}
+Seurat::DimPlot(sobj, group.by = "seurat_clusters",
+                reduction = name2D, label = TRUE) +
+  Seurat::NoAxes() +
+  ggplot2::labs(title = "Clusters",
+                subtitle = paste0(ncol(sobj), " cells")) +
+  ggplot2::theme(aspect.ratio = 1,
+                 plot.title = element_text(hjust = 0.5),
+                 plot.subtitle = element_text(hjust = 0.5),
+                 legend.position = "none")
+```
+
+This is the annotation smoothed by cluster :
+
+```{r see_cell_type_cluster, fig.width = 7, fig.height = 6}
+fig_cell_type = Seurat::DimPlot(sobj, group.by = "cluster_type",
+                                reduction = name2D, cols = color_markers) +
+  Seurat::NoAxes() +
+  ggplot2::labs(title = "Cell Type",
+                subtitle = "cluster level annotation") +
+  ggplot2::theme(aspect.ratio = 1,
+                 plot.title = element_text(hjust = 0.5),
+                 plot.subtitle = element_text(hjust = 0.5),
+                 legend.position = "right")
+fig_cell_type
+```
+
+and split by sample :
+
+```{r see_cell_type_split_cluster, fig.width = 15, fig.height = 10}
+plot_list = aquarius::plot_split_dimred(sobj,
+                                        reduction = name2D,
+                                        split_by = "project_name",
+                                        split_color = sample_info$color,
+                                        group_by = "cluster_type",
+                                        group_color = color_markers)
+
+patchwork::wrap_plots(plot_list, nrow = 3) &
+  Seurat::NoLegend()
+```
+
+## By project name
+
+We look at `project_name` annotation :
+
+```{r see_project_name, fig.width = 7, fig.height = 6}
+# Random order
+set.seed(1234)
+rnd_order = sample(colnames(sobj), replace = FALSE, size = ncol(sobj))
+
+# Extract coordinates
+cells_coord = sobj@reductions[[name2D]]@cell.embeddings %>%
+  as.data.frame() %>%
+  `colnames<-`(c("Dim1", "Dim2"))
+cells_coord$project_name = sobj$project_name
+cells_coord$tumor_type = sobj$tumor_type
+cells_coord = cells_coord[(rnd_order), ]
+
+# Plot
+fig_project_name = ggplot2::ggplot(cells_coord, aes(x = Dim1, y = Dim2, col = project_name)) +
+  ggplot2::geom_point(size = 0.1) +
+  ggplot2::scale_color_manual(values = sample_info$color,
+                              breaks = sample_info$project_name) +
+  ggplot2::labs(title = "Project Name") +
+  ggplot2::theme_void() +
+  ggplot2::theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 15),
+                 aspect.ratio = 1) +
+  guides(color  = guide_legend(title = "Project Name",
+                               override.aes = list(size = 3)))
+fig_project_name
+```
+
+We look at `tumor_type` annotation :
+
+```{r see_tumor_type, fig.width = 7, fig.height = 6}
+fig_tumor_type = ggplot2::ggplot(cells_coord, aes(x = Dim1, y = Dim2, col = tumor_type)) +
+  ggplot2::geom_point(size = 0.1) +
+  ggplot2::scale_color_manual(values = tumor_type_colors,
+                              breaks = names(tumor_type_colors)) +
+  ggplot2::labs(title = "Tumor Type") +
+  ggplot2::theme_void() +
+  ggplot2::theme(plot.title = element_text(hjust = 0.5, face = "bold", size = 15),
+                 aspect.ratio = 1) +
+  guides(color  = guide_legend(title = "Tumor Type",
+                               override.aes = list(size = 3)))
+fig_tumor_type
+```
+
+We represent cell type split by tumor type :
+
+```{r cell_type_split, fig.width = 12, fig.height = 5}
+plot_list = aquarius::plot_split_dimred(sobj,
+                                        reduction = name2D,
+                                        split_by = "tumor_type",
+                                        group_by = "cluster_type",
+                                        group_color = unlist(color_markers))
+
+fig_split = patchwork::wrap_plots(plot_list, nrow = 1) &
+  Seurat::NoLegend()
+  
+fig_split
+```
+
+We look at sample composition :
+
+```{r barplot, fig.width = 12, fig.height = 6}
+sobj$project_name = sobj$project_name %>%
+  as.character() %>%
+  factor(., levels = sample_info %>%
+           dplyr::arrange(tumor_type, as.character(project_name)) %>%
+           dplyr::pull(project_name) %>% as.character())
+
+aquarius::plot_barplot(df = table(sobj$project_name,
+                                  sobj$cluster_type) %>%
+                         as.data.frame.table() %>%
+                         `colnames<-`(c("Sample", "Cell Type", "Number")),
+                       x = "Sample", y = "Number", fill = "Cell Type",
+                       position = position_stack()) +
+  ggplot2::scale_fill_manual(values = unlist(color_markers),
+                             breaks = names(color_markers),
+                             name = "Cell Type") +
+  ggplot2::theme(axis.title = element_blank(),
+                 axis.text.x = element_text(color = sample_info$color))
+```
+
+## Quality Control
+
+This is the log number of UMI detected in each dataset :
+
+```{r vln_log_nCount_RNA, fig.width = 12, fig.height = 7}
+Seurat::VlnPlot(sobj, features = "log_nCount_RNA", pt.size = 0.01,
+                group.by = "project_name", cols = sample_info$color) +
+  ggplot2::theme(axis.title.x = element_blank()) +
+  ggplot2::guides(fill = guide_legend(ncol = 1))
+```
+
+This is the number of features detected in each dataset :
+
+```{r vln_nFeature_RNA, fig.width = 12, fig.height = 7}
+Seurat::VlnPlot(sobj, features = "nFeature_RNA", pt.size = 0.01,
+                group.by = "project_name", cols = sample_info$color) +
+  ggplot2::theme(axis.title.x = element_blank()) +
+  ggplot2::guides(fill = guide_legend(ncol = 1))
+```
+
+This is the percentage of UMI related to genes from mitochondrial genome, detected in each dataset :
+
+```{r vln_percent.mt, fig.width = 12, fig.height = 7}
+Seurat::VlnPlot(sobj, features = "percent.mt", pt.size = 0.01,
+                group.by = "project_name", cols = sample_info$color) +
+  ggplot2::theme(axis.title.x = element_blank()) +
+  ggplot2::guides(fill = guide_legend(ncol = 1))
+```
+
+This is the percentage of UMI related to ribosomal subunits, detected in each dataset :
+
+```{r vln_percent.rb, fig.width = 12, fig.height = 7}
+Seurat::VlnPlot(sobj, features = "percent.rb", pt.size = 0.01,
+                group.by = "project_name", cols = sample_info$color) +
+  ggplot2::theme(axis.title.x = element_blank()) +
+  ggplot2::guides(fill = guide_legend(ncol = 1))
+```
+
+This is the XIST expression level, used to distinguish women (XIST+) from men (XIST-) :
+
+```{r vln_xist, fig.width = 12, fig.height = 7}
+Seurat::VlnPlot(sobj, features = "XIST", pt.size = 0.01,
+                group.by = "project_name", cols = sample_info$color) +
+  ggplot2::theme(axis.title.x = element_blank()) +
+  ggplot2::guides(fill = guide_legend(ncol = 1))
+```
+
+This dotplot assesses the cell type annotation :
+
+```{r fig6_Y, class.source = 'fold-hide', fig.width = 8, fig.height = 5}
+markers = dotplot_markers[levels(sobj$cluster_type)] # new order
+markers = unique(unlist(markers)) # as vector
+markers = markers[!(markers %in% c("PTPRC"))]
+markers = c("PTPRC", markers)
+markers = markers[markers %in% rownames(sobj)]
+
+fig_dotplot = aquarius::fig_plot_dotplot(sobj,
+                                         groupby = "cluster_type",
+                                         markers = markers,
+                                         gene_expression_colors = aquarius::color_gene)
+fig_dotplot
+```
+
+We represent expression levels for those markers on the projection :
+
+```{r see_markers, fig.width = 12, fig.height = 13}
+plot_list = lapply(markers, FUN = function(one_gene) {
+  p = Seurat::FeaturePlot(sobj, features = one_gene,
+                          pt.size = 0.001,
+                          reduction = name2D, order = TRUE) +
+    ggplot2::scale_color_gradientn(colors = aquarius::color_gene) +
+    Seurat::NoAxes() +
+    ggplot2::theme(aspect.ratio = 1,
+                   plot.title = element_text(hjust = 0.5),
+                   legend.position = "right")
+  
+  return(p)
+})
+names(plot_list) = markers
+
+patchwork::wrap_plots(plot_list, ncol = 4)
+```
+
+## Dotplot
+
+We define genes of interest, to represent on the dotplot :
+
+```{r genes_of_interest}
+genes_of_interest = c("TIGIT", "VSIR", "LGALS9", "HAVCR2", "SIRPA", "CD47",
+                      "PDCD1", "ICOS", "LAG3", "CD274", "PDCD1LG2",
+                      "FAS", "FASLG", "GZMB", "GZMH", "GZMA", "GZMK",
+                      "PRF1", "GNLY", "IDO1", "IL4I1", "ARG2", "NOS2",
+                      "HLA-A", "HLA-B", "HLA-C", 
+                      # RAS-related
+                      "MAP2K1", "MAP2K2", "MAPK1", "MAPK3", "CCND1",  # MAPK pathway
+                      "KRAS", "NRAS", "HRAS", "ARAF", "BRAF", "RAF1") # RAS and RAF
+
+```
+
+We make the figure :
+
+```{r dotplot, fig.width = 13, fig.height = 12}
+plot_list = lapply(levels(sobj$cluster_type), FUN = function(one_cell_type) {
+  subsobj = subset(sobj, cluster_type == one_cell_type)
+  
+  p = Seurat::DotPlot(subsobj, assay = "RNA",
+                      features = genes_of_interest,
+                      group.by = "tumor_type",
+                      scale = TRUE,
+                      scale.by = "radius") +
+    ggplot2::labs(title = one_cell_type) +
+    ggplot2::scale_y_discrete(position = "right") +
+    ggplot2::theme(axis.text.x = ggplot2::element_text(angle = 45, hjust = 0),
+                   plot.title = element_text(hjust = 0.5, size = 10),
+                   axis.title = element_blank(),
+                   axis.text = element_text(size = 10)) +
+    ggplot2::scale_color_gradientn(colors = aquarius::color_cnv) +
+    ggplot2::coord_flip()
+  
+  return(p)
+})
+
+p1 = plot_list[[1]]
+plot_list = lapply(plot_list, FUN = function(one_plot) {
+  axis_text = ggplot_build(one_plot)$layout$panel_scales_y[[1]]$range$range
+  axis_color = tumor_type_colors[axis_text]
+  
+  one_plot +
+    ggplot2::theme(axis.text.y = element_blank(),
+                   axis.line.y = element_blank(),
+                   axis.ticks.y = element_blank(),
+                   legend.position = "none",
+                   # axis.text.x = ggplot2::element_text(angle = 0, hjust = 0.5, size = 20,
+                   #                                     color = axis_color),
+                   text = element_text(size = 15)) #+
+  # ggplot2::scale_y_discrete(labels = rep("\U25CF", 3),
+  #                           position = "right")
+})
+plot_list[[1]] = p1 +
+  ggplot2::theme(legend.position = "left")
+
+fig_main_dotplot = patchwork::wrap_plots(plot_list, nrow = 1) +
+  patchwork::plot_layout(guides = "collect")
+fig_main_dotplot
+```
+
+
+## Violin plot
+
+In this section, we make violin plot within specific cell types. So, we set cells identifier as cell type smoothed by cluster :
+
+```{r change_idents}
+Seurat::Idents(sobj) = sobj$cluster_type
+table(Seurat::Idents(sobj))
+```
+
+### T cells
+
+Violin plot within T cells :
+
+```{r vln_t_cells_sample, fig.width = 12, fig.height = 7}
+genes_of_interest = c("SIRPA", "HAVCR2", "PDCD1")
+
+plot_list = lapply(genes_of_interest, FUN = function(one_gene) {
+  p = Seurat::VlnPlot(sobj, features = one_gene, pt.size = 0.01,
+                      idents = "T cells",
+                      group.by = "project_name", cols = sample_info$color) +
+    ggplot2::theme(axis.title.x = element_blank()) +
+    ggplot2::guides(fill = guide_legend(ncol = 1))
+  
+  return(p)
+})
+names(plot_list) = genes_of_interest
+
+plot_list
+```
+
+### Macrophages
+
+Violin plot within macrophages :
+
+```{r vln_macrophages_sample, fig.width = 12, fig.height = 7}
+genes_of_interest = c("SIRPA", "HAVCR2", "PDCD1", "CCND1")
+
+plot_list = lapply(genes_of_interest, FUN = function(one_gene) {
+  p = Seurat::VlnPlot(sobj, features = one_gene, pt.size = 0.01,
+                      idents = "macrophages",
+                      group.by = "project_name", cols = sample_info$color) +
+    ggplot2::theme(axis.title.x = element_blank()) +
+    ggplot2::guides(fill = guide_legend(ncol = 1))
+  
+  return(p)
+})
+names(plot_list) = genes_of_interest
+
+plot_list
+```
+
+
+Same figure split by tumor type :
+
+```{r vln_macrophages_tumor_type, fig.width = 6, fig.height = 7}
+plot_list = lapply(genes_of_interest, FUN = function(one_gene) {
+  p = Seurat::VlnPlot(sobj, features = one_gene, pt.size = 0.01,
+                      idents = "macrophages",
+                      group.by = "tumor_type", cols = tumor_type_colors) +
+    ggplot2::theme(axis.title.x = element_blank()) +
+    ggplot2::guides(fill = guide_legend(ncol = 1)) +
+    Seurat::NoLegend()
+  
+  return(p)
+})
+names(plot_list) = genes_of_interest
+
+plot_list
+```
+
+### Tumor cells
+
+Violin plot within tumor cells :
+
+```{r vln_tumor_cells_sample, fig.width = 12, fig.height = 7}
+genes_of_interest = c("HLA-A", "HLA-B", "HLA-C")
+
+plot_list = lapply(genes_of_interest, FUN = function(one_gene) {
+  p = Seurat::VlnPlot(sobj, features = one_gene, pt.size = 0.01,
+                      idents = "tumor cells",
+                      group.by = "project_name", cols = sample_info$color) +
+    ggplot2::theme(axis.title.x = element_blank()) +
+    ggplot2::guides(fill = guide_legend(ncol = 1))
+  
+  return(p)
+})
+names(plot_list) = genes_of_interest
+
+plot_list
+```
+
+
+Same figure split by tumor type :
+
+```{r vln_tumor_cells_tumor_type, fig.width = 6, fig.height = 7}
+plot_list = lapply(genes_of_interest, FUN = function(one_gene) {
+  p = Seurat::VlnPlot(sobj, features = one_gene, pt.size = 0.01,
+                      idents = "tumor cells",
+                      group.by = "tumor_type", cols = tumor_type_colors) +
+    ggplot2::theme(axis.title.x = element_blank()) +
+    ggplot2::guides(fill = guide_legend(ncol = 1)) +
+    Seurat::NoLegend()
+  
+  return(p)
+})
+names(plot_list) = genes_of_interest
+
+plot_list
+```
+
+## Assembly suggestion
+
+In this section, we suggest figures assemblies.
+
+### Main figure
+
+Figure 1 - **Single-cell RNA-sequencing from 18 NF1 patients**. (A) Representation showing 78,518 cells on a tSNE, colored according to tumor type. (B) Representation split by tumor type and colored by cell type. Number of cells associated with each tumor type is written on top of each tSNE. Gray background enables to compare cells location between each tSNE. (C) Dotplot showing gene expression split by cell type and by tumor type. Dot size represents proportion of cells expressing corresponding marker. Dot color represents average gene expression levels for cells concerned by the dot.
+
+
+```{r fig_main, fig.width = 13, fig.height = 13}
+plot_list = list(fig_tumor_type,
+                 fig_split +
+                   patchwork::plot_layout(guides = "collect") &
+                   ggplot2::theme(legend.position = "right") &
+                   guides(color  = guide_legend(title = "Cell type",
+                                                override.aes = list(size = 3))),
+                 fig_main_dotplot)
+
+patchwork::wrap_plots(plot_list, design = "AB\nCC", heights = c(1, 2.5), widths = c(1, 3)) +
+  patchwork::plot_annotation(title = "Main Figure",
+                             theme = theme(plot.title = element_text(hjust = 0.5, size = 20)),
+                             tag_levels = list(c("A", "B", "", "", "C"))) &
+  theme(plot.tag = element_text(face = "plain", size = 20))
+```
+
+### Supplementary figure
+
+Figure S1 - **Single-cell RNA-sequencing from 18 NF1 patients**. (A) Representation showing 78,518 cells on a tSNE, colored according to cell type (a) or project name (b). (B) Dotplot assessing cell populations annotation. Dot size represents proportion of cells expressing corresponding marker. Dot color represents average gene expression levels for cells concerned by the dot.
+
+```{r fig_supp, fig.width = 13, fig.height = 10}
+plot_list = list(fig_cell_type +
+                   guides(color  = guide_legend(title = "Cell type",
+                                                override.aes = list(size = 3))),
+                 fig_project_name,
+                 fig_dotplot)
+
+patchwork::wrap_plots(plot_list, design = "AB\nCC") +
+  patchwork::plot_annotation(title = "Supplementary Figure",
+                             theme = theme(plot.title = element_text(hjust = 0.5, size = 20)),
+                             tag_levels = list(c("A   a", "b", "", "", "B"))) &
+  theme(plot.tag = element_text(face = "plain", size = 20))
+```
+
+Alternative layout and tag :
+
+```{r fig_supp2, fig.width = 13, fig.height = 10}
+plot_list = list(fig_project_name,
+                 fig_cell_type,
+                 fig_dotplot)
+
+patchwork::wrap_plots(plot_list, design = "AC\nBC") +
+  patchwork::plot_annotation(title = "Supplementary Figure",
+                             theme = theme(plot.title = element_text(hjust = 0.5, size = 20)),
+                             tag_levels = 'A') &
+  theme(plot.tag = element_text(face = "plain", size = 20))
+```
+
+# References
+
+- **GSE165826** : [https://doi.org/10.1016/j.stem.2021.04.029](https://doi.org/10.1016/j.stem.2021.04.029)
+- **GSE179033** : [https://doi.org/10.1126/sciadv.abo5442](https://doi.org/10.1126/sciadv.abo5442)
+- **RStudio** : RStudio Team (2020). RStudio: Integrated Development for R. RStudio, PBC, Boston, MA URL http://www.rstudio.com/
+- **rmarkdown** : Yihui Xie and J.J. Allaire and Garrett Grolemund (2018). R Markdown: The Definitive Guide. Chapman and Hall/CRC. ISBN 9781138359338. URL https://bookdown.org/yihui/rmarkdown.
+- **Singularity** : [https://doi.org/10.1371/journal.pone.0177459](https://doi.org/10.1371/journal.pone.0177459)
+- **Seurat V3** : [https://doi.org/10.1016/j.cell.2019.05.031](https://doi.org/10.1016/j.cell.2019.05.031)
+- **scDblFinder** : [https://doi.org/10.12688/f1000research.73600.2](https://doi.org/10.12688/f1000research.73600.2)
+- **scds** : [https://doi.org/10.1093/bioinformatics/btz698](https://doi.org/10.1093/bioinformatics/btz698)
+- **harmony** : [https://doi.org/10.1038/s41592-019-0619-0](https://doi.org/10.1038/s41592-019-0619-0)
+- **ggplot2** : Wickham H (2016). ggplot2: Elegant Graphics for Data Analysis. Springer-Verlag New York. ISBN 978-3-319-24277-4, https://ggplot2.tidyverse.org.
+- **patchwork** : Pedersen T (2022). patchwork: The Composer of Plots. https://patchwork.data-imaginist.com, https://github.com/thomasp85/patchwork.
+- **ComplexHeatmap** : [https://doi.org/10.1093/bioinformatics/btw313](https://doi.org/10.1093/bioinformatics/btw313)
+
+
+# Save
+
+We save the gene-markers used for cell type annotation, for Supplementary Materials:
+
+```{r cell_markers_df}
+write.table(cell_markers_df, file = paste0(out_dir, "/cell_markers.csv"),
+            col.names = TRUE, na = "", row.names = FALSE)
+```
+
+
+# R Session
+
+```{r sessioninfo, echo = FALSE, fold_output = TRUE}
+sessionInfo()
+```
+
