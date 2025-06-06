@@ -1,14 +1,10 @@
 # Analysis of scRNA-Seq data from NF1 patients
 
 The analysis described here is presented in the following publications:
+ 
+> Radomska *et al* (not yet accepted)
 
-> [Brunet *et al*]() (not yet accepted)
-
-> [Radomska *et al*]() (not yet accepted)
-
-To read the analysis, please open `index.html` (local machine) or open it using the following link:
-
-[https://audrey-onfroy.github.io/brunet_et_al/](https://audrey-onfroy.github.io/brunet_et_al/)
+> Brunet *et al* (not yet accepted)
 
 ## Detailed methods
 
